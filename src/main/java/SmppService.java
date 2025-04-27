@@ -28,33 +28,31 @@ public class SmppService {
     public void sendSms(String phoneNumber, String message) throws Exception {
         SMPPSession session = new SMPPSession();
         try {
-            // Подключение к SMPP серверу
             session.connectAndBind(host, port,
                     new BindParameter(BindType.BIND_TX, systemId, password,
                             systemType, ton, npi, null));
 
-            // Отправка сообщения
             String messageId = session.submitShortMessage(
-                    "CMT",                    // serviceType
-                    ton,                      // sourceAddrTon (TypeOfNumber)
-                    npi,                      // sourceAddrNpi (NumberingPlanIndicator)
-                    sourceAddress,            // sourceAddr (String)
-                    ton,                      // destAddrTon (TypeOfNumber)
-                    npi,                      // destAddrNpi (NumberingPlanIndicator)
-                    phoneNumber,              // destinationAddr (String)
-                    new ESMClass(),           // esmClass
-                    (byte)0,                  // protocolId
-                    (byte)1,                  // priorityFlag
-                    null,                     // scheduleDeliveryTime
-                    null,                     // validityPeriod
-                    new RegisteredDelivery(SMSCDeliveryReceipt.DEFAULT), // registeredDelivery
-                    (byte)0,                  // replaceIfPresentFlag
-                    new GeneralDataCoding(Alphabet.ALPHA_DEFAULT, MessageClass.CLASS1, false), // dataCoding
-                    (byte)0,                  // smDefaultMsgId
-                    message.getBytes()        // shortMessage
+                    "CMT",
+                    ton,
+                    npi,
+                    sourceAddress,
+                    ton,
+                    npi,
+                    phoneNumber,
+                    new ESMClass(),
+                    (byte)0,
+                    (byte)1,
+                    null,
+                    null,
+                    new RegisteredDelivery(SMSCDeliveryReceipt.DEFAULT),
+                    (byte)0,
+                    new GeneralDataCoding(Alphabet.ALPHA_DEFAULT, MessageClass.CLASS1, false),
+                    (byte)0,
+                    message.getBytes()
             );
 
-            System.out.println("SMS отправлено, ID: " + messageId);
+            System.out.println("SMS sent: " + messageId);
         } finally {
             if (session != null) {
                 session.unbindAndClose();

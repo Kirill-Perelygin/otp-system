@@ -30,4 +30,8 @@ public class User {
     public boolean checkPassword(String inputPassword) {
         return password.equals(inputPassword);
     }
+
+    public String getLogFilenamePrefix() {
+        return "user_" + id + "_" + username.replaceAll("[^a-zA-Z0-9]", "_");
+    }
 }

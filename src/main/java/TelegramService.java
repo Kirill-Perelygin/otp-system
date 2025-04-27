@@ -24,13 +24,12 @@ public class TelegramService extends TelegramLongPollingBot {
 
     @Override
     public void onUpdateReceived(Update update) {
-        // Обработка входящих сообщений не требуется для отправки OTP
     }
 
     public void sendOTP(String chatId, String otpCode) throws TelegramApiException {
         SendMessage message = new SendMessage();
         message.setChatId(chatId);
-        message.setText("Ваш OTP код: " + otpCode + "\nДействителен 5 минут");
+        message.setText("Your OTP code is valid " + otpCode + "\nfor 5 minutes");
 
         execute(message);
     }

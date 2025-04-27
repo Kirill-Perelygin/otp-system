@@ -1,4 +1,5 @@
 import java.sql.*;
+import java.io.File;
 
 public class DatabaseManager {
     private static final String DB_URL = "jdbc:postgresql://localhost:5432/otp_db?currentSchema=OTP";
@@ -19,11 +20,12 @@ public class DatabaseManager {
         try (Connection conn = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD);
              Statement stmt = conn.createStatement()) {
 
-            // Проверяем существование базы данных
+            new File(FileOTPStorage.OTP_LOG_DIR).mkdirs();
+
             ResultSet rs = conn.getMetaData().getCatalogs();
             boolean dbExists = false;
             while (rs.next()) {
-                if (DB_NAME.equals(rs.getString(1))) {
+                if ("otp_db".equals(rs.getString(1))) {
                     dbExists = true;
                     break;
                 }
@@ -31,38 +33,32 @@ public class DatabaseManager {
             rs.close();
 
             if (!dbExists) {
-                stmt.executeUpdate("CREATE DATABASE " + DB_NAME);
+                stmt.executeUpdate("CREATE DATABASE otp_db");
             }
         }
     }
 
     public static Connection getConnection() throws SQLException {
-        String connectionUrl = "jdbc:postgresql://localhost:5432/" + DB_NAME;
+        String connectionUrl = "jdbc:postgresql://localhost:5432/otp_db?currentSchema=public";
         return DriverManager.getConnection(connectionUrl, DB_USER, DB_PASSWORD);
     }
 
-    public static void initializeDatabase() {
+    public static void initializeDatabase() throws SQLException {
         try (Connection conn = getConnection();
              Statement stmt = conn.createStatement()) {
 
-            // Создаем схему public если не существует
-            stmt.execute("CREATE SCHEMA IF NOT EXISTS public");
-
-            // Создаем таблицы
             stmt.execute("CREATE TABLE IF NOT EXISTS users (" +
                     "id SERIAL PRIMARY KEY," +
                     "username VARCHAR(50) UNIQUE NOT NULL," +
                     "password VARCHAR(100) NOT NULL," +
+                    "email VARCHAR(100)," +
+                    "phone VARCHAR(20)," +
+                    "telegram_chat_id VARCHAR(50)," +
                     "is_admin BOOLEAN DEFAULT FALSE)");
 
             stmt.execute("CREATE TABLE IF NOT EXISTS secrets (" +
                     "user_id INTEGER PRIMARY KEY REFERENCES users(id)," +
                     "secret_key BYTEA NOT NULL)");
-
-            // Добавляем администратора если не существует
-            stmt.execute("INSERT INTO users (username, password, is_admin) " +
-                    "SELECT 'admin', 'admin123', TRUE " +
-                    "WHERE NOT EXISTS (SELECT 1 FROM users WHERE username = 'admin')");
 
             stmt.execute("CREATE TABLE IF NOT EXISTS otp_codes (" +
                     "id SERIAL PRIMARY KEY," +
@@ -71,8 +67,10 @@ public class DatabaseManager {
                     "generation_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP," +
                     "is_used BOOLEAN DEFAULT FALSE)");
 
-        } catch (SQLException e) {
-            throw new RuntimeException("Database initialization failed", e);
+            // Добавляем администратора если не существует
+            stmt.execute("INSERT INTO users (username, password, is_admin) " +
+                    "SELECT 'admin', 'admin123', TRUE " +
+                    "WHERE NOT EXISTS (SELECT 1 FROM users WHERE username = 'admin')");
         }
     }
 }

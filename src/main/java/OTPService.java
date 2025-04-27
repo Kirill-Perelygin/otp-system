@@ -22,7 +22,7 @@ public class OTPService {
             stmt.setInt(1, userId);
             stmt.setString(2, code);
             ResultSet rs = stmt.executeQuery();
-            return rs.next(); // Если есть результат - код валиден
+            return rs.next();
         }
     }
 

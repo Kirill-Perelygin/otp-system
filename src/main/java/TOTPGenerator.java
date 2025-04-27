@@ -1,16 +1,14 @@
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.ByteBuffer;
-import java.security.InvalidKeyException;
-import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.sql.SQLException;
 import java.util.Base64;
 
 public class TOTPGenerator {
     private static final String HMAC_ALGORITHM = "HmacSHA1";
-    private static final int TIME_STEP = 30; // 30 секунд
-    private static final int CODE_DIGITS = 6; // 6-значный код
+    private static final int TIME_STEP = 30;
+    private static final int CODE_DIGITS = 6;
 
     private final byte[] secretKey;
 
@@ -19,7 +17,7 @@ public class TOTPGenerator {
     }
 
     public static byte[] generateSecretKey() {
-        byte[] key = new byte[20]; // 160 бит
+        byte[] key = new byte[20];
         new SecureRandom().nextBytes(key);
         return key;
     }
@@ -42,26 +40,27 @@ public class TOTPGenerator {
 
             int otp = binary % (int) Math.pow(10, CODE_DIGITS);
             return String.format("%0" + CODE_DIGITS + "d", otp);
-        } catch (NoSuchAlgorithmException | InvalidKeyException e) {
-            throw new RuntimeException("Ошибка генерации TOTP", e);
+        } catch (Exception e) {
+            throw new RuntimeException("OTP generation error", e);
         }
-    }
-
-    public boolean validateTOTP(String userCode) {
-        String generatedCode = generateTOTP();
-        return generatedCode.equals(userCode);
     }
 
     public String generateAndSaveTOTP(int userId) throws SQLException {
         String otp = generateTOTP();
         OTPService.saveOTP(userId, otp);
+        FileOTPStorage.saveOTP(userId, otp);
         return otp;
     }
 
     public boolean validateAndMarkUsed(int userId, String code) throws SQLException {
-        return OTPService.validateOTP(userId, code);
+        boolean isValid = OTPService.validateOTP(userId, code);
+        FileOTPStorage.logOTPValidation(userId, code, isValid);
+        return isValid;
     }
 
+    public boolean validateTOTP(String userCode) {
+        return generateTOTP().equals(userCode);
+    }
 
     public static String bytesToBase32(byte[] bytes) {
         return Base64.getEncoder().encodeToString(bytes);
