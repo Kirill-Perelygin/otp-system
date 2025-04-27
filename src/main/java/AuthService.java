@@ -1,31 +1,45 @@
-import java.util.HashMap;
-import java.util.Map;
+import java.sql.*;
 
 public class AuthService {
-    private final Map<String, User> users;
-
-    public AuthService() {
-        users = new HashMap<>();
-        // Предзаполненные пользователи (админ по умолчанию)
-        users.put("admin", new User("admin", "admin123", true));
-    }
-
     public User authenticate(String username, String password) {
-        User user = users.get(username);
-        if (user != null && user.checkPassword(password)) {
-            return user;
+        String sql = "SELECT * FROM users WHERE username = ?";
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+
+            stmt.setString(1, username);
+            ResultSet rs = stmt.executeQuery();
+
+            if (rs.next() && rs.getString("password").equals(password)) {
+                return new User(
+                        rs.getString("username"),
+                        rs.getString("password"),
+                        rs.getBoolean("is_admin")
+                );
+            }
+        } catch (SQLException e) {
+            e.printStackTrace();
         }
         return null;
     }
 
     public boolean register(String username, String password, boolean isAdmin, User creator) {
-        if (users.containsKey(username)) {
-            return false; // Пользователь уже существует
+        if (creator != null && isAdmin && !creator.isAdmin()) {
+            return false;
         }
-        if (isAdmin && (creator == null || !creator.isAdmin())) {
-            return false; // Только админ может создавать админов
+
+        String sql = "INSERT INTO users (username, password, is_admin) VALUES (?, ?, ?)";
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
+
+            stmt.setString(1, username);
+            stmt.setString(2, password);
+            stmt.setBoolean(3, isAdmin);
+            stmt.executeUpdate();
+            return true;
+
+        } catch (SQLException e) {
+            e.printStackTrace();
+            return false;
         }
-        users.put(username, new User(username, password, isAdmin));
-        return true;
     }
 }

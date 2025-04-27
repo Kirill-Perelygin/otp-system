@@ -4,6 +4,7 @@ import java.nio.ByteBuffer;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
+import java.sql.SQLException;
 import java.util.Base64;
 
 public class TOTPGenerator {
@@ -50,6 +51,17 @@ public class TOTPGenerator {
         String generatedCode = generateTOTP();
         return generatedCode.equals(userCode);
     }
+
+    public String generateAndSaveTOTP(int userId) throws SQLException {
+        String otp = generateTOTP();
+        OTPService.saveOTP(userId, otp);
+        return otp;
+    }
+
+    public boolean validateAndMarkUsed(int userId, String code) throws SQLException {
+        return OTPService.validateOTP(userId, code);
+    }
+
 
     public static String bytesToBase32(byte[] bytes) {
         return Base64.getEncoder().encodeToString(bytes);
