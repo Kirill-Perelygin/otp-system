@@ -1,23 +1,45 @@
 import java.sql.*;
 import java.util.Scanner;
+import javax.mail.MessagingException;
+import org.jsmpp.bean.*;
+import org.jsmpp.session.*;
 
 public class OTPApp {
     private static final AuthService authService = new AuthService();
     private static byte[] secretKey;
 
+    // Настройки SMTP
+    private static final String SMTP_HOST = "smtp.gmail.com";
+    private static final int SMTP_PORT = 587;
+    private static final String EMAIL_USERNAME = "your.email@gmail.com";
+    private static final String EMAIL_PASSWORD = "yourpassword";
+    private static final boolean USE_TLS = true;
+
+    // Настройки SMPP
+    private static final String SMPP_HOST = "smpp.example.com";
+    private static final int SMPP_PORT = 2775;
+    private static final String SMPP_SYSTEM_ID = "your_smpp_login";
+    private static final String SMPP_PASSWORD = "your_smpp_password";
+    private static final String SMPP_SOURCE_ADDR = "OTPService";
+
+    private static EmailService emailService;
+    private static SmppService smppService;
+
     public static void main(String[] args) {
         try {
-            // Инициализация базы данных
+            // Инициализация сервисов
             DatabaseManager.initializeDatabase();
+            emailService = new EmailService(SMTP_HOST, SMTP_PORT, EMAIL_USERNAME, EMAIL_PASSWORD, USE_TLS);
+            smppService = new SmppService(
+                    SMPP_HOST, SMPP_PORT, SMPP_SYSTEM_ID, SMPP_PASSWORD,
+                    "", TypeOfNumber.INTERNATIONAL, NumberingPlanIndicator.ISDN,
+                    SMPP_SOURCE_ADDR);
+
             Scanner scanner = new Scanner(System.in);
             User currentUser = null;
 
-            // Очистка устаревших OTP-кодов
-            try {
-                OTPService.cleanupExpiredOTPs();
-            } catch (SQLException e) {
-                System.out.println("⚠️ Не удалось очистить старые OTP-коды: " + e.getMessage());
-            }
+            // Очистка устаревших OTP
+            OTPService.cleanupExpiredOTPs();
 
             // Главное меню (вход/регистрация)
             while (currentUser == null) {
@@ -46,18 +68,16 @@ public class OTPApp {
 
             // Инициализация TOTP
             TOTPGenerator otpGenerator = initTOTP(scanner, currentUser);
-            int currentUserId = getUserId(currentUser.getUsername());
+            int currentUserId = currentUser.getId();
+            String userEmail = currentUser.getEmail();
+            String userPhone = currentUser.getPhone();
 
-            if (currentUserId == -1) {
-                throw new RuntimeException("Пользователь не найден в базе данных");
-            }
-
-            // Главное меню (в зависимости от роли)
+            // Главное меню
             while (true) {
                 if (currentUser.isAdmin()) {
-                    showAdminMenu(scanner, otpGenerator, currentUser, currentUserId);
+                    showAdminMenu(scanner, otpGenerator, currentUser);
                 } else {
-                    showUserMenu(scanner, otpGenerator, currentUserId);
+                    showUserMenu(scanner, otpGenerator, currentUserId, userEmail, userPhone);
                 }
             }
 
@@ -68,7 +88,7 @@ public class OTPApp {
         }
     }
 
-    private static User login(Scanner scanner) {
+    private static User login(Scanner scanner) throws SQLException {
         System.out.print("Логин: ");
         String username = scanner.nextLine();
         System.out.print("Пароль: ");
@@ -83,11 +103,20 @@ public class OTPApp {
         return user;
     }
 
-    private static void registerUser(Scanner scanner, User creator) {
+    private static void registerUser(Scanner scanner, User creator) throws SQLException {
         System.out.print("Логин: ");
         String username = scanner.nextLine();
         System.out.print("Пароль: ");
         String password = scanner.nextLine();
+        System.out.print("Email: ");
+        String email = scanner.nextLine();
+        System.out.print("Телефон (79123456789): ");
+        String phone = scanner.nextLine();
+
+        if (!validatePhoneNumber(phone)) {
+            System.out.println("❌ Неверный формат телефона!");
+            return;
+        }
 
         boolean isAdmin = false;
         if (creator != null && creator.isAdmin()) {
@@ -95,24 +124,19 @@ public class OTPApp {
             isAdmin = scanner.nextLine().equalsIgnoreCase("y");
         }
 
-        try {
-            boolean success = authService.register(username, password, isAdmin, creator);
-            if (success) {
-                System.out.println("✅ Пользователь " + username + " зарегистрирован!");
-            } else {
-                System.out.println("❌ Ошибка регистрации (логин занят или нет прав)");
-            }
-        } catch (Exception e) {
-            System.out.println("❌ Ошибка при регистрации: " + e.getMessage());
+        boolean success = authService.register(username, password, email, phone, isAdmin, creator);
+        if (success) {
+            System.out.println("✅ Пользователь " + username + " зарегистрирован!");
+        } else {
+            System.out.println("❌ Ошибка регистрации (логин занят или нет прав)");
         }
     }
 
-    private static TOTPGenerator initTOTP(Scanner scanner, User user) throws SQLException {
-        int userId = getUserId(user.getUsername());
-        if (userId == -1) {
-            throw new RuntimeException("Пользователь не найден в БД");
-        }
+    private static boolean validatePhoneNumber(String phone) {
+        return phone.matches("^7\\d{10}$");
+    }
 
+    private static TOTPGenerator initTOTP(Scanner scanner, User user) throws SQLException {
         if (user.isAdmin()) {
             System.out.println("1. Сгенерировать новый секретный ключ");
             System.out.println("2. Ввести существующий ключ");
@@ -122,49 +146,42 @@ public class OTPApp {
 
             if (choice == 1) {
                 secretKey = TOTPGenerator.generateSecretKey();
-                OTPStorage.saveSecretKey(userId, secretKey);
+                OTPStorage.saveSecretKey(user.getId(), secretKey);
                 System.out.println("🔒 Ключ сохранён в БД: " + TOTPGenerator.bytesToBase32(secretKey));
             } else {
                 System.out.print("Введите ключ (Base32): ");
                 String base32Key = scanner.nextLine();
                 secretKey = TOTPGenerator.base32ToBytes(base32Key);
-                OTPStorage.saveSecretKey(userId, secretKey);
+                OTPStorage.saveSecretKey(user.getId(), secretKey);
             }
         } else {
-            secretKey = OTPStorage.getSecretKey(userId);
+            secretKey = OTPStorage.getSecretKey(user.getId());
             if (secretKey == null) {
                 secretKey = TOTPGenerator.generateSecretKey();
-                OTPStorage.saveSecretKey(userId, secretKey);
+                OTPStorage.saveSecretKey(user.getId(), secretKey);
             }
         }
         return new TOTPGenerator(secretKey);
     }
 
-    private static int getUserId(String username) throws SQLException {
-        String sql = "SELECT id FROM users WHERE username = ?";
-        try (Connection conn = DatabaseManager.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql)) {
-
-            stmt.setString(1, username);
-            ResultSet rs = stmt.executeQuery();
-            return rs.next() ? rs.getInt("id") : -1;
-        }
-    }
-
-    private static void showUserMenu(Scanner scanner, TOTPGenerator otpGenerator, int userId) {
+    private static void showUserMenu(Scanner scanner, TOTPGenerator otpGenerator,
+                                     int userId, String userEmail, String userPhone) {
         while (true) {
             System.out.println("\n=== Меню пользователя ===");
             System.out.println("1. Сгенерировать OTP");
             System.out.println("2. Проверить OTP");
-            System.out.println("3. Выход");
+            System.out.println("3. Отправить OTP на email");
+            System.out.println("4. Отправить OTP по SMS");
+            System.out.println("5. Выход");
             System.out.print("Выберите действие: ");
 
             try {
                 int choice = Integer.parseInt(scanner.nextLine());
+                String otp;
 
                 switch (choice) {
                     case 1:
-                        String otp = otpGenerator.generateAndSaveTOTP(userId);
+                        otp = otpGenerator.generateAndSaveTOTP(userId);
                         System.out.println("🔄 OTP: " + otp);
                         break;
                     case 2:
@@ -174,6 +191,26 @@ public class OTPApp {
                         System.out.println(isValid ? "✅ Верно!" : "❌ Неверно!");
                         break;
                     case 3:
+                        otp = otpGenerator.generateAndSaveTOTP(userId);
+                        try {
+                            emailService.sendEmail(userEmail, "Ваш OTP код",
+                                    "Ваш одноразовый код: " + otp + "\nДействителен 5 минут");
+                            System.out.println("✉️ OTP отправлен на " + userEmail);
+                        } catch (MessagingException e) {
+                            System.out.println("❌ Ошибка отправки: " + e.getMessage());
+                        }
+                        break;
+                    case 4:
+                        otp = otpGenerator.generateAndSaveTOTP(userId);
+                        try {
+                            smppService.sendSms(userPhone,
+                                    "Ваш OTP код: " + otp + "\nДействителен 5 минут");
+                            System.out.println("📱 OTP отправлен на номер " + userPhone);
+                        } catch (Exception e) {
+                            System.out.println("❌ Ошибка отправки SMS: " + e.getMessage());
+                        }
+                        break;
+                    case 5:
                         System.exit(0);
                     default:
                         System.out.println("❌ Неверный выбор!");
@@ -184,24 +221,31 @@ public class OTPApp {
         }
     }
 
-    private static void showAdminMenu(Scanner scanner, TOTPGenerator otpGenerator, User admin, int adminId) {
+    private static void showAdminMenu(Scanner scanner, TOTPGenerator otpGenerator, User admin) {
+        int adminId = admin.getId();
+        String adminEmail = admin.getEmail();
+        String adminPhone = admin.getPhone();
+
         while (true) {
             System.out.println("\n=== Меню администратора ===");
             System.out.println("1. Сгенерировать OTP");
             System.out.println("2. Проверить OTP");
-            System.out.println("3. Показать текущий ключ");
-            System.out.println("4. Изменить ключ");
-            System.out.println("5. Зарегистрировать пользователя");
-            System.out.println("6. Показать историю OTP");
-            System.out.println("7. Выход");
+            System.out.println("3. Отправить OTP на email");
+            System.out.println("4. Отправить OTP по SMS");
+            System.out.println("5. Показать текущий ключ");
+            System.out.println("6. Изменить ключ");
+            System.out.println("7. Зарегистрировать пользователя");
+            System.out.println("8. Показать историю OTP");
+            System.out.println("9. Выход");
             System.out.print("Выберите действие: ");
 
             try {
                 int choice = Integer.parseInt(scanner.nextLine());
+                String otp;
 
                 switch (choice) {
                     case 1:
-                        String otp = otpGenerator.generateAndSaveTOTP(adminId);
+                        otp = otpGenerator.generateAndSaveTOTP(adminId);
                         System.out.println("🔄 OTP: " + otp);
                         break;
                     case 2:
@@ -211,22 +255,42 @@ public class OTPApp {
                         System.out.println(isValid ? "✅ Верно!" : "❌ Неверно!");
                         break;
                     case 3:
-                        System.out.println("🔑 Текущий ключ: " + TOTPGenerator.bytesToBase32(secretKey));
+                        otp = otpGenerator.generateAndSaveTOTP(adminId);
+                        try {
+                            emailService.sendEmail(adminEmail, "Ваш OTP код",
+                                    "Ваш одноразовый код: " + otp + "\nДействителен 5 минут");
+                            System.out.println("✉️ OTP отправлен на " + adminEmail);
+                        } catch (MessagingException e) {
+                            System.out.println("❌ Ошибка отправки: " + e.getMessage());
+                        }
                         break;
                     case 4:
+                        otp = otpGenerator.generateAndSaveTOTP(adminId);
+                        try {
+                            smppService.sendSms(adminPhone,
+                                    "Ваш OTP код: " + otp + "\nДействителен 5 минут");
+                            System.out.println("📱 OTP отправлен на номер " + adminPhone);
+                        } catch (Exception e) {
+                            System.out.println("❌ Ошибка отправки SMS: " + e.getMessage());
+                        }
+                        break;
+                    case 5:
+                        System.out.println("🔑 Текущий ключ: " + TOTPGenerator.bytesToBase32(secretKey));
+                        break;
+                    case 6:
                         System.out.print("Введите новый ключ (Base32): ");
                         String newKey = scanner.nextLine();
                         secretKey = TOTPGenerator.base32ToBytes(newKey);
                         OTPStorage.saveSecretKey(adminId, secretKey);
                         System.out.println("🔑 Ключ изменён!");
                         break;
-                    case 5:
+                    case 7:
                         registerUser(scanner, admin);
                         break;
-                    case 6:
+                    case 8:
                         showOTPHistory();
                         break;
-                    case 7:
+                    case 9:
                         System.exit(0);
                     default:
                         System.out.println("❌ Неверный выбор!");
