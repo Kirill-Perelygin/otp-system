@@ -1,8 +1,8 @@
 import java.sql.*;
 import java.util.Scanner;
 import javax.mail.MessagingException;
+import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import org.jsmpp.bean.*;
-import org.jsmpp.session.*;
 
 public class OTPApp {
     private static final AuthService authService = new AuthService();
@@ -22,8 +22,13 @@ public class OTPApp {
     private static final String SMPP_PASSWORD = "your_smpp_password";
     private static final String SMPP_SOURCE_ADDR = "OTPService";
 
+    // Настройки Telegram
+    private static final String TELEGRAM_BOT_TOKEN = "ваш_bot_token";
+    private static final String TELEGRAM_BOT_USERNAME = "ваш_bot_username";
+
     private static EmailService emailService;
     private static SmppService smppService;
+    private static TelegramService telegramService;
 
     public static void main(String[] args) {
         try {
@@ -34,6 +39,7 @@ public class OTPApp {
                     SMPP_HOST, SMPP_PORT, SMPP_SYSTEM_ID, SMPP_PASSWORD,
                     "", TypeOfNumber.INTERNATIONAL, NumberingPlanIndicator.ISDN,
                     SMPP_SOURCE_ADDR);
+            telegramService = new TelegramService(TELEGRAM_BOT_TOKEN, TELEGRAM_BOT_USERNAME);
 
             Scanner scanner = new Scanner(System.in);
             User currentUser = null;
@@ -68,16 +74,13 @@ public class OTPApp {
 
             // Инициализация TOTP
             TOTPGenerator otpGenerator = initTOTP(scanner, currentUser);
-            int currentUserId = currentUser.getId();
-            String userEmail = currentUser.getEmail();
-            String userPhone = currentUser.getPhone();
 
             // Главное меню
             while (true) {
                 if (currentUser.isAdmin()) {
                     showAdminMenu(scanner, otpGenerator, currentUser);
                 } else {
-                    showUserMenu(scanner, otpGenerator, currentUserId, userEmail, userPhone);
+                    showUserMenu(scanner, otpGenerator, currentUser);
                 }
             }
 
@@ -112,6 +115,8 @@ public class OTPApp {
         String email = scanner.nextLine();
         System.out.print("Телефон (79123456789): ");
         String phone = scanner.nextLine();
+        System.out.print("Telegram Chat ID (необязательно): ");
+        String telegramChatId = scanner.nextLine();
 
         if (!validatePhoneNumber(phone)) {
             System.out.println("❌ Неверный формат телефона!");
@@ -124,7 +129,7 @@ public class OTPApp {
             isAdmin = scanner.nextLine().equalsIgnoreCase("y");
         }
 
-        boolean success = authService.register(username, password, email, phone, isAdmin, creator);
+        boolean success = authService.register(username, password, email, phone, telegramChatId, isAdmin, creator);
         if (success) {
             System.out.println("✅ Пользователь " + username + " зарегистрирован!");
         } else {
@@ -164,15 +169,16 @@ public class OTPApp {
         return new TOTPGenerator(secretKey);
     }
 
-    private static void showUserMenu(Scanner scanner, TOTPGenerator otpGenerator,
-                                     int userId, String userEmail, String userPhone) {
+    private static void showUserMenu(Scanner scanner, TOTPGenerator otpGenerator, User user) {
         while (true) {
             System.out.println("\n=== Меню пользователя ===");
             System.out.println("1. Сгенерировать OTP");
             System.out.println("2. Проверить OTP");
             System.out.println("3. Отправить OTP на email");
             System.out.println("4. Отправить OTP по SMS");
-            System.out.println("5. Выход");
+            System.out.println("5. Отправить OTP в Telegram");
+            System.out.println("6. Привязать Telegram аккаунт");
+            System.out.println("7. Выход");
             System.out.print("Выберите действие: ");
 
             try {
@@ -181,36 +187,52 @@ public class OTPApp {
 
                 switch (choice) {
                     case 1:
-                        otp = otpGenerator.generateAndSaveTOTP(userId);
+                        otp = otpGenerator.generateAndSaveTOTP(user.getId());
                         System.out.println("🔄 OTP: " + otp);
                         break;
                     case 2:
                         System.out.print("Введите OTP: ");
                         String code = scanner.nextLine();
-                        boolean isValid = otpGenerator.validateAndMarkUsed(userId, code);
+                        boolean isValid = otpGenerator.validateAndMarkUsed(user.getId(), code);
                         System.out.println(isValid ? "✅ Верно!" : "❌ Неверно!");
                         break;
                     case 3:
-                        otp = otpGenerator.generateAndSaveTOTP(userId);
+                        otp = otpGenerator.generateAndSaveTOTP(user.getId());
                         try {
-                            emailService.sendEmail(userEmail, "Ваш OTP код",
+                            emailService.sendEmail(user.getEmail(), "Ваш OTP код",
                                     "Ваш одноразовый код: " + otp + "\nДействителен 5 минут");
-                            System.out.println("✉️ OTP отправлен на " + userEmail);
+                            System.out.println("✉️ OTP отправлен на " + user.getEmail());
                         } catch (MessagingException e) {
                             System.out.println("❌ Ошибка отправки: " + e.getMessage());
                         }
                         break;
                     case 4:
-                        otp = otpGenerator.generateAndSaveTOTP(userId);
+                        otp = otpGenerator.generateAndSaveTOTP(user.getId());
                         try {
-                            smppService.sendSms(userPhone,
+                            smppService.sendSms(user.getPhone(),
                                     "Ваш OTP код: " + otp + "\nДействителен 5 минут");
-                            System.out.println("📱 OTP отправлен на номер " + userPhone);
+                            System.out.println("📱 OTP отправлен на номер " + user.getPhone());
                         } catch (Exception e) {
                             System.out.println("❌ Ошибка отправки SMS: " + e.getMessage());
                         }
                         break;
                     case 5:
+                        if (user.getTelegramChatId() == null || user.getTelegramChatId().isEmpty()) {
+                            System.out.println("❌ Telegram аккаунт не привязан");
+                            break;
+                        }
+                        otp = otpGenerator.generateAndSaveTOTP(user.getId());
+                        try {
+                            telegramService.sendOTP(user.getTelegramChatId(), otp);
+                            System.out.println("📨 OTP отправлен в Telegram");
+                        } catch (TelegramApiException e) {
+                            System.out.println("❌ Ошибка отправки в Telegram: " + e.getMessage());
+                        }
+                        break;
+                    case 6:
+                        bindTelegramAccount(scanner, user.getId());
+                        break;
+                    case 7:
                         System.exit(0);
                     default:
                         System.out.println("❌ Неверный выбор!");
@@ -221,22 +243,34 @@ public class OTPApp {
         }
     }
 
-    private static void showAdminMenu(Scanner scanner, TOTPGenerator otpGenerator, User admin) {
-        int adminId = admin.getId();
-        String adminEmail = admin.getEmail();
-        String adminPhone = admin.getPhone();
+    private static void bindTelegramAccount(Scanner scanner, int userId) throws SQLException {
+        System.out.print("Введите ваш Telegram Chat ID: ");
+        String chatId = scanner.nextLine();
 
+        String sql = "UPDATE users SET telegram_chat_id = ? WHERE id = ?";
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+
+            stmt.setString(1, chatId);
+            stmt.setInt(2, userId);
+            stmt.executeUpdate();
+            System.out.println("✅ Telegram аккаунт привязан");
+        }
+    }
+
+    private static void showAdminMenu(Scanner scanner, TOTPGenerator otpGenerator, User admin) {
         while (true) {
             System.out.println("\n=== Меню администратора ===");
             System.out.println("1. Сгенерировать OTP");
             System.out.println("2. Проверить OTP");
             System.out.println("3. Отправить OTP на email");
             System.out.println("4. Отправить OTP по SMS");
-            System.out.println("5. Показать текущий ключ");
-            System.out.println("6. Изменить ключ");
-            System.out.println("7. Зарегистрировать пользователя");
-            System.out.println("8. Показать историю OTP");
-            System.out.println("9. Выход");
+            System.out.println("5. Отправить OTP в Telegram");
+            System.out.println("6. Показать текущий ключ");
+            System.out.println("7. Изменить ключ");
+            System.out.println("8. Зарегистрировать пользователя");
+            System.out.println("9. Показать историю OTP");
+            System.out.println("10. Выход");
             System.out.print("Выберите действие: ");
 
             try {
@@ -245,52 +279,65 @@ public class OTPApp {
 
                 switch (choice) {
                     case 1:
-                        otp = otpGenerator.generateAndSaveTOTP(adminId);
+                        otp = otpGenerator.generateAndSaveTOTP(admin.getId());
                         System.out.println("🔄 OTP: " + otp);
                         break;
                     case 2:
                         System.out.print("Введите OTP: ");
                         String code = scanner.nextLine();
-                        boolean isValid = otpGenerator.validateAndMarkUsed(adminId, code);
+                        boolean isValid = otpGenerator.validateAndMarkUsed(admin.getId(), code);
                         System.out.println(isValid ? "✅ Верно!" : "❌ Неверно!");
                         break;
                     case 3:
-                        otp = otpGenerator.generateAndSaveTOTP(adminId);
+                        otp = otpGenerator.generateAndSaveTOTP(admin.getId());
                         try {
-                            emailService.sendEmail(adminEmail, "Ваш OTP код",
+                            emailService.sendEmail(admin.getEmail(), "Ваш OTP код",
                                     "Ваш одноразовый код: " + otp + "\nДействителен 5 минут");
-                            System.out.println("✉️ OTP отправлен на " + adminEmail);
+                            System.out.println("✉️ OTP отправлен на " + admin.getEmail());
                         } catch (MessagingException e) {
                             System.out.println("❌ Ошибка отправки: " + e.getMessage());
                         }
                         break;
                     case 4:
-                        otp = otpGenerator.generateAndSaveTOTP(adminId);
+                        otp = otpGenerator.generateAndSaveTOTP(admin.getId());
                         try {
-                            smppService.sendSms(adminPhone,
+                            smppService.sendSms(admin.getPhone(),
                                     "Ваш OTP код: " + otp + "\nДействителен 5 минут");
-                            System.out.println("📱 OTP отправлен на номер " + adminPhone);
+                            System.out.println("📱 OTP отправлен на номер " + admin.getPhone());
                         } catch (Exception e) {
                             System.out.println("❌ Ошибка отправки SMS: " + e.getMessage());
                         }
                         break;
                     case 5:
-                        System.out.println("🔑 Текущий ключ: " + TOTPGenerator.bytesToBase32(secretKey));
+                        if (admin.getTelegramChatId() == null || admin.getTelegramChatId().isEmpty()) {
+                            System.out.println("❌ Telegram аккаунт не привязан");
+                            break;
+                        }
+                        otp = otpGenerator.generateAndSaveTOTP(admin.getId());
+                        try {
+                            telegramService.sendOTP(admin.getTelegramChatId(), otp);
+                            System.out.println("📨 OTP отправлен в Telegram");
+                        } catch (TelegramApiException e) {
+                            System.out.println("❌ Ошибка отправки в Telegram: " + e.getMessage());
+                        }
                         break;
                     case 6:
+                        System.out.println("🔑 Текущий ключ: " + TOTPGenerator.bytesToBase32(secretKey));
+                        break;
+                    case 7:
                         System.out.print("Введите новый ключ (Base32): ");
                         String newKey = scanner.nextLine();
                         secretKey = TOTPGenerator.base32ToBytes(newKey);
-                        OTPStorage.saveSecretKey(adminId, secretKey);
+                        OTPStorage.saveSecretKey(admin.getId(), secretKey);
                         System.out.println("🔑 Ключ изменён!");
                         break;
-                    case 7:
+                    case 8:
                         registerUser(scanner, admin);
                         break;
-                    case 8:
+                    case 9:
                         showOTPHistory();
                         break;
-                    case 9:
+                    case 10:
                         System.exit(0);
                     default:
                         System.out.println("❌ Неверный выбор!");

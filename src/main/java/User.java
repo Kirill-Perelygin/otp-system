@@ -4,15 +4,18 @@ public class User {
     private final String password;
     private final String email;
     private final String phone;
+    private final String telegramChatId;
     private final boolean isAdmin;
 
     public User(int id, String username, String password,
-                String email, String phone, boolean isAdmin) {
+                String email, String phone, String telegramChatId,
+                boolean isAdmin) {
         this.id = id;
         this.username = username;
         this.password = password;
         this.email = email;
         this.phone = phone;
+        this.telegramChatId = telegramChatId;
         this.isAdmin = isAdmin;
     }
 
@@ -21,6 +24,7 @@ public class User {
     public String getUsername() { return username; }
     public String getEmail() { return email; }
     public String getPhone() { return phone; }
+    public String getTelegramChatId() { return telegramChatId; }
     public boolean isAdmin() { return isAdmin; }
 
     public boolean checkPassword(String inputPassword) {
